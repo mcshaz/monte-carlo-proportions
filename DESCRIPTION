@@ -1,0 +1,13 @@
+Package: monteCarloProportions
+Type: Package
+Title: Utilities For Running Monte-Carlo Simulations On Proportions
+Version: 1.0
+Date: 2020-05-26
+Author: Brent McSharry
+Maintainer: Brent McSharry <brentm@adhb.govt.nz>
+Description: Currently in Alpha development stage. Run multiple simulations of different trial sizes and different known effect sizes. Summarise the data from these trials.
+License: AGPL (>= 3)
+Depends: Rcpp (>= 1.0.4), RcppProgress (>= 0.1)
+LinkingTo: Rcpp, RcppProgress
+Suggests: 
+    testthat
