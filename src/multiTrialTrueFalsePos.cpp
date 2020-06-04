@@ -5,6 +5,9 @@
 #include <progress_bar.hpp>
 #include <mutex>
 #include <algorithm>
+#include <random>
+#include <cmath>
+#include <pcg-cpp/pcg_random.hpp>
 #include "FisherRepo.h"
 
 #ifdef _OPENMP
@@ -16,22 +19,29 @@
 // [[Rcpp::depends(RcppProgress)]]
 using namespace Rcpp;
 
-// [[Rcpp::export]]
-void multiTrialTrueFalsePos(NumericVector baselineRisks,
-                                 IntegerVector participantsPerArm,
-                                 double absRRStep,
-                                 int monteCarloRuns,
-                                 Rcpp::String path) {
+inline static pcg32 getMCRNG() {
+  // Seed with a real random value, if available
+  pcg_extras::seed_seq_from<std::random_device> seed_source;
 
+  // Make a random number engine
+  pcg32 rng(seed_source);
+  return rng;
+}
+
+void multiTrialTrueFalsePos(std::vector<double> &baselineRisks,
+                            std::vector<unsigned int> &participantsPerArm,
+                            double absRRStep,
+                            int monteCarloRuns,
+                            const char* path) {
 #ifdef _OPENMP
   omp_set_num_threads(std::min(omp_get_max_threads(), (int)participantsPerArm.size()));
 #endif
   std::mutex outfileMutex;
-  std::ofstream outfile(path.get_cstring());
+  std::ofstream outfile(path);
   if (!outfile.is_open()) {
     Rcpp::stop("Unable to write to file\n");
   }
-  outfile << "trialN\triskCtrl\triskRx\tnonSig\tRxHarm\tRxBenefit\n";
+  outfile << "trialN\triskCtrl\triskRx\tnonSig\tRxBenefit\n";
   const double epsilon = std::numeric_limits<double>::epsilon();
   unsigned int riskSteps = 0;
   for (double& br : baselineRisks) {
@@ -43,45 +53,77 @@ void multiTrialTrueFalsePos(NumericVector baselineRisks,
   Progress p(participantsPerArm.size() * riskSteps, true);
 
   const size_t runLimit = monteCarloRuns; // micro optimisation
-// #pragma omp parallel for schedule(dynamic)
-  for(const int& partNo :participantsPerArm)
+  #pragma omp parallel for schedule(dynamic)
+  for(size_t pni = 0; pni < participantsPerArm.size(); ++pni)
   {
+    const unsigned int partNo = participantsPerArm[pni];
     FisherRepo repo(partNo);
+    pcg32 mcrng = getMCRNG();
+    pcg32* rngChkPt = NULL;
+    if (pni == participantsPerArm.size() - 1){
+      pcg32 mcrngCopy = mcrng;
+      rngChkPt = &mcrngCopy;
+    }
     for (const double& baseRisk: baselineRisks)
     {
-      if (!p.is_aborted()) { // the only way to exit an OpenMP loop
-        NumericVector baselineOutcomes = rbinom(monteCarloRuns, partNo, baseRisk);
-        for (double intervRisk = baseRisk; intervRisk > epsilon; intervRisk -= absRRStep)
-        {
-          int nonSig = 0;
-          int rxHarm = 0;
-          int rxBenefit = 0;
-          NumericVector intervOutcomes = rbinom(monteCarloRuns, partNo, intervRisk);
+      std::binomial_distribution<unsigned int> cBinom(partNo, baseRisk);
+      bool isPerfectTest = false;
+      // NumericVector baselineOutcomes = br(mcrng); // rbinom(monteCarloRuns, partNo, baseRisk);
+      for (double intervRisk = baseRisk; intervRisk > epsilon; intervRisk -= absRRStep)
+      {
+        std::binomial_distribution<unsigned int> iBinom(partNo, intervRisk);
+        unsigned int nonSig = 0;
+        unsigned int rxBenefit = 0;
+        if (isPerfectTest) {
+          rxBenefit = partNo;
+        } else {
+        // NumericVector intervOutcomes = rbinom(monteCarloRuns, partNo, intervRisk);
           for (size_t i = 0; i < runLimit; ++i) {
-            if (repo.getP(intervOutcomes[i], baselineOutcomes[i]) >= 0.05){
+            const unsigned int ir = iBinom(mcrng);
+            const unsigned int cr = cBinom(mcrng);
+            if (repo.getP(ir, cr) >= 0.05){
               ++nonSig;
-            } else if (intervOutcomes[i] > baselineOutcomes[i]) {
-              ++rxHarm;
-            } else {
+            } else if (ir < cr) {
               ++rxBenefit;
             }
           }
-          // scoping the lock - i.e. free the lock for waiting threads as soon as file has written row of data
-          {
-            const std::lock_guard<std::mutex> lock(outfileMutex);
-            // "trialN\triskCtrl\triskRx\tnonSig\tRxHarm\tRxBenefit\n"
-            outfile << partNo * 2 << "\t" << baseRisk << "\t" << intervRisk << "\t" << nonSig << "\t" << rxHarm << "\t" << rxBenefit << "\n";
-          }
-          p.increment(); //increment progress bar
           // if no false positives or negatives results, there is no point decreasing risk reduction further
-          if ((rxHarm == 0 && nonSig == 0) || Progress::check_abort()) {
-            // to do increment progress bar further if skipping for 0
-            break;
-            // break not allowed in parallelised loops, but this should just break out to the surrounding loop, which is not parallelised
+          if (rxBenefit == partNo) {
+            isPerfectTest = true;
           }
         }
+        // scoping the lock - i.e. free the lock for waiting threads as soon as file has written row of data
+        {
+          const std::lock_guard<std::mutex> lock(outfileMutex);
+          // "trialN\triskCtrl\triskRx\tnonSig\tRxBenefit\n"
+          outfile << partNo * 2 << "\t" << baseRisk << "\t" << intervRisk << "\t" << nonSig << "\t" << rxBenefit << "\n";
+        }
+        p.increment(); //increment progress bar
+        if (Progress::check_abort()) {
+          Rcpp::stop("Aborted by User\n");
+        }
       }
+    }
+    if (rngChkPt != NULL) {
+      Rcout << "Required 2^" << log2(mcrng - *rngChkPt) << " of 2^64 random numbers\n";
     }
   }
   outfile.close();
 }
+
+// [[Rcpp::export]]
+void multiTrialTrueFalsePos(NumericVector baselineRisks,
+                            IntegerVector participantsPerArm,
+                            double absRRStep,
+                            int monteCarloRuns,
+                            Rcpp::String path) {
+  std::vector<double> br = Rcpp::as<std::vector<double>>(baselineRisks);
+  std::vector<unsigned int> ppa = Rcpp::as<std::vector<unsigned int>>(participantsPerArm);
+  multiTrialTrueFalsePos(br,
+                         ppa,
+                         absRRStep,
+                         monteCarloRuns,
+                         path.get_cstring());
+  Rcout << "completed\n";
+}
+
