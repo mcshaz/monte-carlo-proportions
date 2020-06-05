@@ -6,6 +6,7 @@
 #include <mutex>
 #include <algorithm>
 #include <random>
+#include <memory>
 #include <cmath>
 #include <pcg-cpp/pcg_random.hpp>
 #include "FisherRepo.h"
@@ -18,13 +19,13 @@
 // [[Rcpp::plugins(cpp14)]]
 // [[Rcpp::depends(RcppProgress)]]
 using namespace Rcpp;
-
-inline static pcg32 getMCRNG() {
+typedef pcg32_k2_fast chosenRNG; // pcg32_k64
+inline static chosenRNG getMCRNG() {
   // Seed with a real random value, if available
   pcg_extras::seed_seq_from<std::random_device> seed_source;
 
-  // Make a random number engine
-  pcg32 rng(seed_source);
+  // Make a random number engine - could also forgo seed_source and use memory address with pcg32_unique
+  chosenRNG rng(seed_source);
   return rng;
 }
 
@@ -45,10 +46,11 @@ void multiTrialTrueFalsePos(std::vector<double> &baselineRisks,
   const double epsilon = std::numeric_limits<double>::epsilon();
   unsigned int riskSteps = 0;
   for (double& br : baselineRisks) {
-    riskSteps += (br + epsilon) / absRRStep;
-    if ((br - absRRStep * (double)riskSteps) > epsilon) {
+    unsigned int stp = (br + epsilon) / absRRStep;
+    if ((br - absRRStep * (double)stp) > epsilon) {
       ++riskSteps;
     }
+    riskSteps += stp;
   }
   Progress p(participantsPerArm.size() * riskSteps, true);
 
@@ -58,11 +60,10 @@ void multiTrialTrueFalsePos(std::vector<double> &baselineRisks,
   {
     const unsigned int partNo = participantsPerArm[pni];
     FisherRepo repo(partNo);
-    pcg32 mcrng = getMCRNG();
-    pcg32* rngChkPt = NULL;
+    chosenRNG mcrng = getMCRNG();
+    std::unique_ptr<chosenRNG> rngChkPtr = nullptr;
     if (pni == participantsPerArm.size() - 1){
-      pcg32 mcrngCopy = mcrng;
-      rngChkPt = &mcrngCopy;
+      rngChkPtr = std::make_unique<chosenRNG>(mcrng);
     }
     for (const double& baseRisk: baselineRisks)
     {
@@ -75,7 +76,7 @@ void multiTrialTrueFalsePos(std::vector<double> &baselineRisks,
         unsigned int nonSig = 0;
         unsigned int rxBenefit = 0;
         if (isPerfectTest) {
-          rxBenefit = partNo;
+          rxBenefit = runLimit;
         } else {
         // NumericVector intervOutcomes = rbinom(monteCarloRuns, partNo, intervRisk);
           for (size_t i = 0; i < runLimit; ++i) {
@@ -88,7 +89,7 @@ void multiTrialTrueFalsePos(std::vector<double> &baselineRisks,
             }
           }
           // if no false positives or negatives results, there is no point decreasing risk reduction further
-          if (rxBenefit == partNo) {
+          if (rxBenefit == runLimit) {
             isPerfectTest = true;
           }
         }
@@ -104,13 +105,12 @@ void multiTrialTrueFalsePos(std::vector<double> &baselineRisks,
         }
       }
     }
-    if (rngChkPt != NULL) {
-      Rcout << "Required 2^" << log2(mcrng - *rngChkPt) << " of 2^64 random numbers\n";
+    if (rngChkPtr) {
+      Rcout << "Required 2^" << log2(mcrng - (*rngChkPtr)) << " of 2^" << rngChkPtr->period_pow2() << " random numbers\n";
     }
   }
   outfile.close();
 }
-
 // [[Rcpp::export]]
 void multiTrialTrueFalsePos(NumericVector baselineRisks,
                             IntegerVector participantsPerArm,
