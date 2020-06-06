@@ -9,6 +9,7 @@
 #include <memory>
 #include <cmath>
 #include <pcg-cpp/pcg_random.hpp>
+#include <randutils/randutils.hpp>
 #include "FisherRepo.h"
 
 #ifdef _OPENMP
@@ -19,18 +20,10 @@
 // [[Rcpp::plugins(cpp14)]]
 // [[Rcpp::depends(RcppProgress)]]
 using namespace Rcpp;
-typedef pcg32_k2_fast chosenRNG; // pcg32_k64
-inline static chosenRNG getMCRNG() {
-  // Seed with a real random value, if available
-  pcg_extras::seed_seq_from<std::random_device> seed_source;
-
-  // Make a random number engine - could also forgo seed_source and use memory address with pcg32_unique
-  chosenRNG rng(seed_source);
-  return rng;
-}
+typedef pcg32 chosenRNG; // pcg32_k64
 
 void multiTrialTrueFalsePos(std::vector<double> &baselineRisks,
-                            std::vector<unsigned int> &participantsPerArm,
+                            std::vector<unsigned> &participantsPerArm,
                             double absRRStep,
                             int monteCarloRuns,
                             const char* path) {
@@ -44,9 +37,9 @@ void multiTrialTrueFalsePos(std::vector<double> &baselineRisks,
   }
   outfile << "trialN\triskCtrl\triskRx\tnonSig\tRxBenefit\n";
   const double epsilon = std::numeric_limits<double>::epsilon();
-  unsigned int riskSteps = 0;
+  unsigned riskSteps = 0;
   for (double& br : baselineRisks) {
-    unsigned int stp = (br + epsilon) / absRRStep;
+    unsigned stp = (br + epsilon) / absRRStep;
     if ((br - absRRStep * (double)stp) > epsilon) {
       ++riskSteps;
     }
@@ -58,30 +51,29 @@ void multiTrialTrueFalsePos(std::vector<double> &baselineRisks,
   #pragma omp parallel for schedule(dynamic)
   for(size_t pni = 0; pni < participantsPerArm.size(); ++pni)
   {
-    const unsigned int partNo = participantsPerArm[pni];
+    const unsigned partNo = participantsPerArm[pni];
     FisherRepo repo(partNo);
-    chosenRNG mcrng = getMCRNG();
-    std::unique_ptr<chosenRNG> rngChkPtr = nullptr;
-    if (pni == participantsPerArm.size() - 1){
-      rngChkPtr = std::make_unique<chosenRNG>(mcrng);
-    }
+    randutils::auto_seed_128 seeds;
+    chosenRNG mcrng{seeds};
+    pcg32::state_type streamNo = 0;
     for (const double& baseRisk: baselineRisks)
     {
-      std::binomial_distribution<unsigned int> cBinom(partNo, baseRisk);
+      std::binomial_distribution<unsigned> cBinom(partNo, baseRisk);
       bool isPerfectTest = false;
       // NumericVector baselineOutcomes = br(mcrng); // rbinom(monteCarloRuns, partNo, baseRisk);
       for (double intervRisk = baseRisk; intervRisk > epsilon; intervRisk -= absRRStep)
       {
-        std::binomial_distribution<unsigned int> iBinom(partNo, intervRisk);
-        unsigned int nonSig = 0;
-        unsigned int rxBenefit = 0;
+        std::binomial_distribution<unsigned> iBinom(partNo, intervRisk);
+        unsigned nonSig = 0;
+        unsigned rxBenefit = 0;
         if (isPerfectTest) {
           rxBenefit = runLimit;
         } else {
         // NumericVector intervOutcomes = rbinom(monteCarloRuns, partNo, intervRisk);
+          mcrng.set_stream(++streamNo);
           for (size_t i = 0; i < runLimit; ++i) {
-            const unsigned int ir = iBinom(mcrng);
-            const unsigned int cr = cBinom(mcrng);
+            const unsigned ir = iBinom(mcrng);
+            const unsigned cr = cBinom(mcrng);
             if (repo.getP(ir, cr) >= 0.05){
               ++nonSig;
             } else if (ir < cr) {
@@ -105,8 +97,8 @@ void multiTrialTrueFalsePos(std::vector<double> &baselineRisks,
         }
       }
     }
-    if (rngChkPtr) {
-      Rcout << "Required 2^" << log2(mcrng - (*rngChkPtr)) << " of 2^" << rngChkPtr->period_pow2() << " random numbers\n";
+    if (mcrng.wrapped()) {
+      Rcerr << "Insufficient period to chosen random number generator leading to wrapping around 0 state (period of 2^" << mcrng.period_pow2() << ")\n";
     }
   }
   outfile.close();
@@ -118,7 +110,7 @@ void multiTrialTrueFalsePos(NumericVector baselineRisks,
                             int monteCarloRuns,
                             Rcpp::String path) {
   std::vector<double> br = Rcpp::as<std::vector<double>>(baselineRisks);
-  std::vector<unsigned int> ppa = Rcpp::as<std::vector<unsigned int>>(participantsPerArm);
+  std::vector<unsigned> ppa = Rcpp::as<std::vector<unsigned>>(participantsPerArm);
   multiTrialTrueFalsePos(br,
                          ppa,
                          absRRStep,
