@@ -11,16 +11,18 @@
 #include <pcg-cpp/pcg_random.hpp>
 #include <randutils/randutils.hpp>
 #include "FisherRepo.h"
+#include "ChiRepo.hpp"
 
 #ifdef _OPENMP
 #include <omp.h>
 #endif
 
+#define minChi2 5
+
 // [[Rcpp::plugins(openmp)]]
 // [[Rcpp::plugins(cpp14)]]
 // [[Rcpp::depends(RcppProgress)]]
 using namespace Rcpp;
-typedef pcg32 chosenRNG; // pcg32_k64
 
 void multiTrialTrueFalsePos(std::vector<double> &baselineRisks,
                             std::vector<unsigned> &participantsPerArm,
@@ -35,7 +37,7 @@ void multiTrialTrueFalsePos(std::vector<double> &baselineRisks,
   if (!outfile.is_open()) {
     Rcpp::stop("Unable to write to file\n");
   }
-  outfile << "trialN\triskCtrl\triskRx\tnonSig\tRxBenefit\n";
+  outfile << "trialN\triskCtrl\triskRx\tnonSigFish\tRxBenefitFish\tNAChi2\tnonSigChi2\tRxBenefitChi2\n";
   const double epsilon = std::numeric_limits<double>::epsilon();
   unsigned riskSteps = 0;
   for (double& br : baselineRisks) {
@@ -52,10 +54,11 @@ void multiTrialTrueFalsePos(std::vector<double> &baselineRisks,
   for(size_t pni = 0; pni < participantsPerArm.size(); ++pni)
   {
     const unsigned partNo = participantsPerArm[pni];
-    FisherRepo repo(partNo);
+    FisherRepo fishRepo(partNo);
     randutils::auto_seed_128 seeds;
-    chosenRNG mcrng{seeds};
+    pcg32 mcrng(seeds);
     pcg32::state_type streamNo = 0;
+    const unsigned maxChi2 = partNo - minChi2;
     for (const double& baseRisk: baselineRisks)
     {
       std::binomial_distribution<unsigned> cBinom(partNo, baseRisk);
@@ -64,24 +67,34 @@ void multiTrialTrueFalsePos(std::vector<double> &baselineRisks,
       for (double intervRisk = baseRisk; intervRisk > epsilon; intervRisk -= absRRStep)
       {
         std::binomial_distribution<unsigned> iBinom(partNo, intervRisk);
-        unsigned nonSig = 0;
-        unsigned rxBenefit = 0;
+        unsigned nonSigFish = 0;
+        unsigned rxBenefitFish = 0;
+        unsigned nonSigChi2 = 0;
+        unsigned naChi2 = 0;
+        unsigned rxBenefitChi2 = 0;
         if (isPerfectTest) {
-          rxBenefit = runLimit;
+          rxBenefitFish = rxBenefitChi2 = runLimit;
         } else {
         // NumericVector intervOutcomes = rbinom(monteCarloRuns, partNo, intervRisk);
-          mcrng.set_stream(++streamNo);
+          mcrng.set_stream(streamNo++);
           for (size_t i = 0; i < runLimit; ++i) {
             const unsigned ir = iBinom(mcrng);
             const unsigned cr = cBinom(mcrng);
-            if (repo.getP(ir, cr) >= 0.05){
-              ++nonSig;
-            } else if (ir < cr) {
-              ++rxBenefit;
+            if (fishRepo.getP(ir, cr) >= 0.05){
+              ++nonSigFish;
+            } else if(ir < cr) {
+              ++rxBenefitFish;
+            }
+            if (ir < minChi2 || ir > maxChi2 || cr < minChi2 || cr > maxChi2){
+              ++naChi2;
+            } else if(getChi(partNo, ir, cr) >= 0.05){
+              ++nonSigChi2;
+            } else if(ir < cr) {
+              ++rxBenefitChi2;
             }
           }
           // if no false positives or negatives results, there is no point decreasing risk reduction further
-          if (rxBenefit == runLimit) {
+          if (rxBenefitFish == runLimit && rxBenefitChi2 == runLimit) {
             isPerfectTest = true;
           }
         }
@@ -89,7 +102,8 @@ void multiTrialTrueFalsePos(std::vector<double> &baselineRisks,
         {
           const std::lock_guard<std::mutex> lock(outfileMutex);
           // "trialN\triskCtrl\triskRx\tnonSig\tRxBenefit\n"
-          outfile << partNo * 2 << "\t" << baseRisk << "\t" << intervRisk << "\t" << nonSig << "\t" << rxBenefit << "\n";
+          outfile << partNo * 2 << "\t" << baseRisk << "\t" << intervRisk << "\t" << nonSigFish << "\t" << rxBenefitFish <<
+            "\t" << naChi2 << "\t" << nonSigChi2 << "\t" << rxBenefitChi2 << "\n";
         }
         p.increment(); //increment progress bar
         if (Progress::check_abort()) {

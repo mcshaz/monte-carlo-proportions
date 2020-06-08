@@ -15,9 +15,11 @@ test_that("multiTrialTrueFalsePos", {
 
   testthat::expect_equal(res$riskCtrl, rep(baseRisk, rowCnt))
   testthat::expect_equivalent(sort(res$riskRx), seq(riskRed, baseRisk, by = riskRed))
-  testthat::expect_equal(res$nonSig, rep(mcruns, rowCnt))
+  testthat::expect_equal(res$nonSigFish, rep(mcruns, rowCnt))
+  testthat::expect_equal(res$NAChi2, rep(mcruns, rowCnt))
   # testthat::expect_equal(res$RxHarm, rep(0, rowCnt))
-  testthat::expect_equal(res$RxBenefit, rep(0, rowCnt))
+  testthat::expect_equal(res$RxBenefitFish, rep(0, rowCnt))
+  testthat::expect_equal(res$RxBenefitChi2, rep(0, rowCnt))
   testthat::expect_equal(res$trialN, rep(participantsPerArm * 2L, rowCnt))
 
 #now test multi threading

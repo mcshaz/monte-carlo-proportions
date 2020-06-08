@@ -16,6 +16,17 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// createChi2Mat
+NumericMatrix createChi2Mat(int allocationsPerArm);
+RcppExport SEXP _monteCarloProportions_createChi2Mat(SEXP allocationsPerArmSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< int >::type allocationsPerArm(allocationsPerArmSEXP);
+    rcpp_result_gen = Rcpp::wrap(createChi2Mat(allocationsPerArm));
+    return rcpp_result_gen;
+END_RCPP
+}
 // monteCarloFisherR
 List monteCarloFisherR(int alloc, IntegerMatrix outcomes);
 RcppExport SEXP _monteCarloProportions_monteCarloFisherR(SEXP allocSEXP, SEXP outcomesSEXP) {
@@ -45,6 +56,7 @@ END_RCPP
 
 static const R_CallMethodDef CallEntries[] = {
     {"_monteCarloProportions_createFisherMat", (DL_FUNC) &_monteCarloProportions_createFisherMat, 1},
+    {"_monteCarloProportions_createChi2Mat", (DL_FUNC) &_monteCarloProportions_createChi2Mat, 1},
     {"_monteCarloProportions_monteCarloFisherR", (DL_FUNC) &_monteCarloProportions_monteCarloFisherR, 2},
     {"_monteCarloProportions_multiTrialTrueFalsePos", (DL_FUNC) &_monteCarloProportions_multiTrialTrueFalsePos, 5},
     {NULL, NULL, 0}

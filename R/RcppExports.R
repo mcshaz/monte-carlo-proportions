@@ -5,6 +5,10 @@ createFisherMat <- function(allocationsPerArm) {
     .Call(`_monteCarloProportions_createFisherMat`, allocationsPerArm)
 }
 
+createChi2Mat <- function(allocationsPerArm) {
+    .Call(`_monteCarloProportions_createChi2Mat`, allocationsPerArm)
+}
+
 monteCarloFisherR <- function(alloc, outcomes) {
     .Call(`_monteCarloProportions_monteCarloFisherR`, alloc, outcomes)
 }
